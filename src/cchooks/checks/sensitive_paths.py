@@ -64,7 +64,7 @@ def classify(path: str, ctx: Context) -> Optional[str]:
         return None
     if util.path_matches(path, cfg.get("allow_patterns", [])):
         return None
-    pats = PATTERNS + list(cfg.get("extra_patterns", []))
+    pats = PATTERNS + [util.norm_path(util.claude_dir()) + "/.credentials.json"] + list(cfg.get("extra_patterns", []))
     # a directory like ~/.ssh should match the ~/.ssh/** pattern too
     return util.path_matches(path, pats) or util.path_matches(path.rstrip("/") + "/", pats)
 

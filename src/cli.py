@@ -3,7 +3,9 @@
   cli.py report [SESSION_ID|--latest] [--all-sessions]   token/tool usage report
   cli.py status                                          install + current session state
   cli.py untaint [SESSION_ID|--latest]                   clear the injection taint
-  cli.py statusline                                      status line (reads Claude Code JSON on stdin)
+  cli.py statusline [--variant auto|subscription|api] [--glyphs basic|ascii|nerd]
+                                                         status line (reads Claude Code JSON on stdin)
+  cli.py ruler [on|off]                                  calibrate the status line's right-edge reserve
   cli.py doctor                                          health check + self-test
   cli.py selftest
   cli.py uninstall [--keep-data]
@@ -112,35 +114,42 @@ def report(args):
     return 0
 
 
-def statusline(_args):
+def statusline(args):
+    """Status line for Claude Code. Options: --variant auto|subscription|api, --glyphs basic|ascii|nerd."""
+    from cchooks import config, statusline as sl
     try:
-        data = json.loads(sys.stdin.read() or "{}")
-    except ValueError:
-        data = {}
-    parts = []
-    model = (data.get("model") or {}).get("display_name")
-    if model:
-        parts.append(model)
-    cw = data.get("context_window") or {}
-    if cw.get("used_percentage") is not None:
-        parts.append("ctx %d%%" % round(float(cw["used_percentage"])))
-    cost = (data.get("cost") or {}).get("total_cost_usd")
-    if cost is not None:
-        parts.append("$%.2f" % float(cost))
-    sid = data.get("session_id")
-    if sid:
-        d = cost_ledger.store(sid).read()
-        rows = [(name, t["result_chars"]) for name, t in d.get("tools", {}).get("main", {}).items()]
-        rows.sort(key=lambda kv: -kv[1])
-        if rows:
-            parts.append("top: " + ", ".join("%s %s" % (n, fmt(util.est_tokens(c))) for n, c in rows[:2]))
-        if state.Store(sid, "taint").read():
-            parts.append("⚠ TAINTED")
+        cfg = config.load("")
+    except config.ConfigError:
+        cfg = json.loads(json.dumps(config.DEFAULTS))  # broken config.json: still show a status line
+    cfg.setdefault("statusline", {})
+    for flag in ("--variant", "--glyphs"):
+        if flag in args and args.index(flag) + 1 < len(args):
+            cfg["statusline"][flag[2:]] = args[args.index(flag) + 1]
+
+    def extras(data):
+        sid = data.get("session_id")
+        if not sid:
+            return {}
         gov = state.Store(sid, "governor").read()
-        running = len(gov.get("running", {})) + len(gov.get("pending", {}))
-        if running:
-            parts.append("agents %d" % running)
-    print(" | ".join(parts))
+        return {"tainted": bool(state.Store(sid, "taint").read()),
+                "agents": len(gov.get("running", {})) + len(gov.get("pending", {}))}
+
+    return sl.main(cfg, extras)
+
+
+def ruler(args):
+    """Toggle the calibration ruler: the status line prints a numbered ruler instead."""
+    from cchooks import statusline as sl
+    flag = sl.ruler_flag()
+    if args and args[0] == "off":
+        if os.path.exists(flag):
+            os.remove(flag)
+        print("Ruler off.")
+    else:
+        open(flag, "w").close()
+        print("Ruler on. Read the last number fully visible in the status line, then set\n"
+              "  \"statusline\": {\"right_reserve\": <terminal width - that number>}\n"
+              "in %s, and run `cli.py ruler off`." % os.path.join(util.data_dir(), "config.json"))
     return 0
 
 
@@ -197,6 +206,8 @@ def main(argv):
         return report(args)
     if cmd == "statusline":
         return statusline(args)
+    if cmd == "ruler":
+        return ruler(args)
     if cmd == "untaint":
         return untaint(args)
     if cmd == "status":

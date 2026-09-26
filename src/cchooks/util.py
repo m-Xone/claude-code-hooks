@@ -19,9 +19,18 @@ def home() -> str:
     return os.path.expanduser("~")
 
 
+def _installed_home() -> str:
+    """<claude dir>/cchooks when running from an installed copy (<claude dir>/cchooks/lib/cchooks/)."""
+    lib = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if os.path.basename(lib) == "lib" and os.path.exists(os.path.join(lib, "hook.py")):
+        return os.path.dirname(lib)
+    return ""
+
+
 def data_dir() -> str:
-    """Root for config, state and logs. Override with CCHOOKS_HOME (tests)."""
-    return os.environ.get("CCHOOKS_HOME") or os.path.join(home(), ".claude", "cchooks")
+    """Root for config, state and logs: CCHOOKS_HOME, else wherever this copy is installed,
+    else <claude dir>/cchooks."""
+    return os.environ.get("CCHOOKS_HOME") or _installed_home() or os.path.join(claude_dir(), "cchooks")
 
 
 def cli_hint(sub: str = "") -> str:
@@ -31,7 +40,12 @@ def cli_hint(sub: str = "") -> str:
 
 
 def claude_dir() -> str:
-    return os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(home(), ".claude")
+    """The Claude Code config folder: CLAUDE_CONFIG_DIR, else the folder this copy is installed
+    in (so hooks keep working if the variable isn't passed through), else ~/.claude."""
+    if os.environ.get("CLAUDE_CONFIG_DIR"):
+        return os.path.expanduser(os.environ["CLAUDE_CONFIG_DIR"])
+    installed = _installed_home()
+    return os.path.dirname(installed) if installed else os.path.join(home(), ".claude")
 
 
 # -------------------------------------------------------------------- paths

@@ -20,7 +20,10 @@ sh install.sh --mode warn                                   # macOS / Linux / WS
 powershell -ExecutionPolicy Bypass -File .\install.ps1 --mode warn   # Windows
 ```
 
-The installer asks how long to keep per-session data (see [Session data](#session-data)). Press Enter to accept 30 days.
+The installer asks three questions. Press Enter to accept each default:
+1. **Claude Code config folder** (`~/.claude`, or `$CLAUDE_CONFIG_DIR` if you use a custom one).
+2. **How long to keep per-session data** (30 days; see [Session data](#session-data)).
+3. **Which status line to install** (auto; see [Status line](#status-line)). If you already have a status line, it asks before replacing it.
 
 Restart Claude Code. `--mode warn` is a safe way to start: every check tells you what it *would* have blocked but lets everything through. When you're happy with what you see, re-run the installer without `--mode warn` to switch to the normal defaults.
 
@@ -53,6 +56,7 @@ sh install.sh --uninstall        # or: .\install.ps1 --uninstall
 | Slop detector | Scores replies and docs for AI writing tells ("Great question!", "delve", "it's not X, it's Y", em-dash overload). |
 | Verification gate | Reminds Claude to run tests or lint before finishing a turn in which it edited code. |
 | Loop detector | Notices repeated identical calls, re-read files and a run of failing commands, and nudges Claude to change approach. |
+| Status line | Shows folder, git branch, model, context use, cost and rate limits, plus a `TAINTED` flag. Fits itself to the terminal width. |
 
 Security checks default to **enforce**. The slop detector and verification gate default to **warn**.
 
@@ -74,7 +78,7 @@ The `!` prefix makes you the one running it; Claude is blocked from clearing the
 - *exact* token totals per model and per subagent;
 - *estimated* per-tool costs: how much context each tool added, its failure rate and its latency.
 
-**Other commands.** `cli.py` also has `status` (modes, session state, recent audit events), `doctor` (health check) and `statusline`.
+**Other commands.** `cli.py` also has `status` (modes, session state, recent audit events), `doctor` (health check) and `ruler` (see [Status line](#status-line)).
 
 ## Install options
 
@@ -86,22 +90,55 @@ The `!` prefix makes you the one running it; Claude is blocked from clearing the
 | `--template DIR` | Deploy a starter `~/.claude` first (see below). |
 | `--dry-run` | Show what would change, change nothing. |
 | `--retention-days N` | Auto-delete session data after N days unused, or `0` to never auto-delete. Skips the question. |
-| `--statusline` | Also install a status line showing context %, cost, top tools and taint state. macOS and Linux only; see the note below for Windows. |
+| `--claude-dir DIR` | Install into a custom Claude Code config folder instead of `~/.claude`. |
+| `--statusline auto\|subscription\|api\|none` | Choose the status line without being asked. Choosing one replaces an existing status line; the old one is restored on uninstall. |
+| `--statusline-glyphs basic\|ascii\|nerd` | Character set for the status line (default `basic`). |
 | `--uninstall [--keep-data]` | Remove the hook entries, `/cchooks-report` and `~/.claude/cchooks/`. `--keep-data` keeps logs and config. |
 | `--doctor` | Check the install and run a self-test. |
 
-**What the installer changes.** It backs up `~/.claude/settings.json`, then adds hook entries to it, keeping your existing settings and hooks. Everything else lives in `~/.claude/cchooks/`. The cloned repo isn't needed after installing.
+**What the installer changes.** It backs up `settings.json`, then adds the hook entries and status line to it. Your other settings and hooks are kept. Everything else lives in `<config folder>/cchooks/`. The cloned repo isn't needed after installing.
+
+**Custom config folder.** Claude Code only reads a folder other than `~/.claude` when `CLAUDE_CONFIG_DIR` points to it, so set that in your shell profile too. The installed hooks find their own folder, so they keep working even if the variable isn't passed through.
 
 **Starter templates.** `--template DIR` is for quickstart repos that ship a recommended `~/.claude`.
 - `settings.json` is merged: your existing values win, and lists such as permission rules are combined.
 - Any other file you already have is saved as `<name>.bak-<timestamp>` before it's replaced.
 - Name the template folder something other than `.claude` (for example `claude-home/`). A folder called `.claude` would also act as the repo's own project settings.
 
-**Windows status line.** Add it to `settings.json` by hand:
+## Status line
+
+```
+ ~/dev/my-app  main ↑1 +3  Opus 5.5 ·high                    ctx 42% (84.2k / 200k)  $1.23 14m  5h 63% 7d 12%
+```
+
+- **Left:** the folder, then the git branch. The branch shows `↑`/`↓` for commits ahead of or behind the remote, `+` for uncommitted changes, and `(local)` if there's no upstream. Then the model and effort level.
+- **Right:** context use (blue, then amber at 60%, then magenta at 85%), session cost and duration, and 5-hour / 7-day rate limits.
+- **Narrow terminals:** optional pieces are dropped first, then the rest is shortened, so the line never runs off the edge.
+- **cchooks extras:** a `TAINTED` flag and the number of running subagents.
+
+Variants:
+- `auto` shows the cost and rate-limit meters only when Claude Code sends that data.
+- `subscription` is for Pro, Max and Team logins.
+- `api` is for API-key logins and shows context only.
+
+Glyph sets:
+- `basic` (the default) uses only characters that standard fonts such as Consolas, Cascadia, Menlo and DejaVu all include, so no font changes are needed.
+- `ascii` suits old consoles.
+- `nerd` adds icons and powerline arrows, but needs a [Nerd Font](https://www.nerdfonts.com).
+
+Change the variant or glyph set any time in `config.json`:
 
 ```json
-"statusLine": {"type": "command", "command": "& 'C:\\Path\\To\\python.exe' -I 'C:\\Users\\you\\.claude\\cchooks\\lib\\cli.py' statusline"}
+"statusline": {"variant": "subscription", "glyphs": "basic", "right_reserve": 0}
 ```
+
+**If the right end gets cut off:** Claude Code uses a few columns at the right edge for its own badges. To find out how many:
+1. Run `cli.py ruler on`. The status line becomes a numbered ruler.
+2. Note the last number you can see.
+3. Set `right_reserve` to your terminal width minus that number.
+4. Run `cli.py ruler off`.
+
+If you used the earlier bash status line, the installer copies your calibrated `RIGHT_RESERVE` from `statusline.conf`.
 
 ## Configuration
 

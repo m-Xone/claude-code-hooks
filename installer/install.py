@@ -3,7 +3,8 @@ pick the Python interpreter; you can also run it directly with the Python
 you want the hooks to use:
 
     python3 installer/install.py [--scope user|project] [--project DIR]
-                                 [--mode warn|enforce] [--statusline] [--retention-days N]
+                                 [--mode warn|enforce] [--retention-days N]
+                                 [--statusline auto|subscription|api|none] [--statusline-glyphs basic|ascii|nerd]
     python3 installer/install.py --hooks-only        # ignore any starter template
     python3 installer/install.py --uninstall [--keep-data]
     python3 installer/install.py --doctor
@@ -29,7 +30,11 @@ def main():
     p.add_argument("--project", help="project directory for --scope project (default: cwd)")
     p.add_argument("--mode", choices=("warn", "enforce"),
                    help="set every check to this mode (default: keep per-check defaults)")
-    p.add_argument("--statusline", action="store_true", help="also install the cchooks status line")
+    p.add_argument("--statusline", choices=("auto", "subscription", "api", "none"),
+                   help="status line variant: auto (default), subscription (context, cost, rate limits), "
+                        "api (context only), or none. Asked interactively if omitted")
+    p.add_argument("--statusline-glyphs", choices=("basic", "ascii", "nerd"),
+                   help="basic (default: characters every font has), ascii, or nerd (needs a Nerd Font)")
     p.add_argument("--template", metavar="DIR",
                    help="starter ~/.claude to deploy first: settings.json is merged (your values win, lists "
                         "unioned); other existing files are backed up to .bak-<timestamp> and replaced")
@@ -45,12 +50,17 @@ def main():
                         "~/.claude/cchooks (code, config, state, logs)")
     p.add_argument("--keep-data", action="store_true", help="with --uninstall: keep config, logs and state")
     p.add_argument("--doctor", action="store_true", help="health check and self-test")
+    p.add_argument("--claude-dir", metavar="DIR",
+                   help="Claude Code config folder to install into (default: $CLAUDE_CONFIG_DIR, else ~/.claude). "
+                        "Asked interactively if omitted")
     a = p.parse_args()
+    installer.select_claude_dir(a.claude_dir, interactive=sys.stdin.isatty() and not (a.dry_run or a.doctor))
     if a.uninstall:
         return installer.uninstall(keep_data=a.keep_data)
     if a.doctor:
         return installer.doctor()
     return installer.install(REPO, scope=a.scope, project=a.project, mode=a.mode, statusline=a.statusline,
+                             glyphs=a.statusline_glyphs,
                              template=None if a.hooks_only else a.template, dry_run=a.dry_run,
                              retention_days=a.retention_days)
 

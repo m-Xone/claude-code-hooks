@@ -166,6 +166,59 @@ class InstallerEndToEnd(unittest.TestCase):
             self.assertEqual(json.load(f)["retention_days"], 0)
         self.assertNotEqual(self.installer("--retention-days", "-3").returncode, 0)
 
+    def test_statusline_keep_replace_restore(self):
+        mine = {"type": "command", "command": "~/.claude/statusline.sh", "padding": 0}
+        s = self.read()
+        s["statusLine"] = mine
+        with open(self.settings, "w") as f:
+            json.dump(s, f)
+        self.assertEqual(self.installer().returncode, 0)        # non-interactive: yours is kept
+        self.assertEqual(self.read()["statusLine"], mine)
+        r = self.installer("--statusline", "api", "--statusline-glyphs", "ascii")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        sl = self.read()["statusLine"]
+        self.assertIn("cli.py", sl["command"])
+        self.assertEqual(sl["refreshInterval"], 2)
+        with open(os.path.join(self.env["CCHOOKS_HOME"], "config.json")) as f:
+            self.assertEqual(json.load(f)["statusline"], {"variant": "api", "glyphs": "ascii"})
+        # the installed command actually runs and prints a line
+        out = subprocess.run(sl["command"], shell=True, input=json.dumps(
+            {"workspace": {"current_dir": self.tmp}, "model": {"display_name": "M"},
+             "context_window": {"used_percentage": 5, "context_window_size": 1000, "total_input_tokens": 50}}),
+            capture_output=True, text=True, env=dict(self.env, COLUMNS="100", CLAUDE_PID="999999"))
+        self.assertIn("ctx 5%", out.stdout, out.stderr)
+        self.assertEqual(self.installer("--uninstall").returncode, 0)
+        self.assertEqual(self.read()["statusLine"], mine)          # restored
+
+    def test_statusline_on_fresh_install(self):
+        self.assertEqual(self.installer().returncode, 0)
+        self.assertIn("cli.py", self.read()["statusLine"]["command"])
+
+    def test_custom_claude_dir(self):
+        custom = os.path.join(self.tmp, "my-claude")
+        env = dict(self.env)
+        env.pop("CCHOOKS_HOME")
+        env.pop("CLAUDE_CONFIG_DIR")
+        r = subprocess.run([sys.executable, os.path.join(ROOT, "installer", "install.py"), "--claude-dir", custom],
+                           env=env, capture_output=True, text=True, timeout=120)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("CLAUDE_CONFIG_DIR", r.stdout)                 # reminder to export it
+        with open(os.path.join(custom, "settings.json")) as f:
+            s = json.load(f)
+        h = s["hooks"]["PreToolUse"][-1]["hooks"][0]
+        self.assertTrue(h["args"][1].startswith(os.path.join(custom, "cchooks", "lib")))
+        # run the installed hook with no env hints at all: it must find its own folder
+        bare = {k: v for k, v in env.items() if not k.startswith(("CCHOOKS", "CLAUDE_CONFIG"))}
+        ev = {"hook_event_name": "PreToolUse", "session_id": "s1", "cwd": self.tmp, "tool_name": "Edit",
+              "tool_input": {"file_path": os.path.join(custom, "settings.json"), "old_string": "a", "new_string": "b"}}
+        out = subprocess.run([h["command"]] + h["args"], input=json.dumps(ev), env=bare,
+                             capture_output=True, text=True, timeout=30)
+        self.assertIn('"deny"', out.stdout)                          # tamper guard knows the custom folder
+        self.assertTrue(os.path.isdir(os.path.join(custom, "cchooks", "state", "s1")))
+        r = subprocess.run([sys.executable, os.path.join(ROOT, "installer", "install.py"), "--claude-dir", custom,
+                            "--uninstall"], env=env, capture_output=True, text=True, timeout=60)
+        self.assertFalse(os.path.exists(os.path.join(custom, "cchooks")))
+
     def test_malformed_settings_aborts(self):
         with open(self.settings, "w") as f:
             f.write("{not json")

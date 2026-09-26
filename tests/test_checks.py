@@ -518,5 +518,73 @@ class Retention(HookTest):
         self.assertEqual(installer.resolve_retention(None, interactive=False), 30)
 
 
+class StatusLine(HookTest):
+    DATA = {"workspace": {"current_dir": "/tmp"}, "model": {"display_name": "Opus 5.5 (1M context)"},
+            "effort": {"level": "high"},
+            "context_window": {"total_input_tokens": 84200, "context_window_size": 200000, "used_percentage": 42},
+            "cost": {"total_cost_usd": 1.23, "total_duration_ms": 840000},
+            "rate_limits": {"five_hour": {"used_percentage": 63}, "seven_day": {"used_percentage": 12}}}
+
+    def line(self, cols=160, extras=None, **cfg):
+        import re
+        from cchooks import statusline
+        out = statusline.build(self.DATA, {"statusline": cfg}, cols=cols, extras=extras)
+        return re.sub(r"\x1b\[[0-9;]*m", "", out)
+
+    def test_variants(self):
+        sub = self.line(variant="subscription")
+        self.assertIn("ctx 42% (84.2k / 200k)", sub)
+        self.assertIn("$1.23 14m", sub)
+        self.assertIn("5h 63% 7d 12%", sub)
+        api = self.line(variant="api")
+        self.assertIn("ctx 42%", api)
+        self.assertNotIn("$1.23", api)
+        self.assertNotIn("5h", api)
+        auto = self.line(variant="auto")
+        self.assertIn("5h 63%", auto)
+
+    def test_fits_and_degrades(self):
+        for cols in (160, 100, 70, 40):
+            self.assertLessEqual(len(self.line(cols=cols)), cols)
+        self.assertIn("TAINTED", self.line(cols=40, extras={"tainted": True}))
+
+    def test_default_glyphs_need_no_special_font(self):
+        # WGL4 (Consolas, Cascadia, Menlo, DejaVu ...) covers Latin-1, arrows and these punctuation marks
+        text = self.line(extras={"tainted": True, "agents": 2}) + self.line(cols=50)
+        for ch in text:
+            self.assertTrue(ord(ch) < 0x100 or ch in "↑↓…·»", "non-basic glyph %r" % ch)
+        ascii_text = self.line(glyphs="ascii", cols=50)
+        self.assertTrue(all(ord(c) < 128 for c in ascii_text), ascii_text)
+
+    def test_ruler(self):
+        from cchooks import statusline
+        os.environ["CC_STATUSLINE_RULER_FLAG"] = os.path.join(self.tmp, "ruler")
+        try:
+            open(os.environ["CC_STATUSLINE_RULER_FLAG"], "w").close()
+            out = statusline.build(self.DATA, {}, cols=42)
+            self.assertEqual(len(out), 42)
+            self.assertTrue(out.endswith("40.."))
+        finally:
+            del os.environ["CC_STATUSLINE_RULER_FLAG"]
+
+    def test_install_prompt_answers(self):
+        import contextlib
+        import io
+        from unittest import mock
+        from cchooks import installer
+        mine = {"type": "command", "command": "~/mine.sh"}
+        for answers, existing, expect in ((["2", "y"], mine, ("subscription", "")),
+                                          (["3", "n"], mine, (None, "kept your existing status line")),
+                                          ([""], None, ("auto", "")), (["4"], None, (None, "skipped")),
+                                          (["x", "api"], None, ("api", ""))):
+            with mock.patch("builtins.input", side_effect=answers), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(installer.resolve_statusline(None, existing, None, True), expect, answers)
+
+    def test_bad_input_still_prints(self):
+        from cchooks import statusline
+        for data in ({}, {"model": "x", "context_window": None, "cost": 5}):
+            self.assertIsInstance(statusline.build(data, {}, cols=80), str)
+
+
 if __name__ == "__main__":
     unittest.main()

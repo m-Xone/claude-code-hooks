@@ -35,6 +35,33 @@ EVENTS: List[Tuple[str, int]] = [
 MIN_PY = (3, 9)
 
 
+def select_claude_dir(flag: Optional[str], interactive: bool) -> str:
+    """Pick the Claude Code config folder for this run and point everything at it.
+
+    Precedence: --claude-dir, else an interactive answer (default shown), else
+    $CLAUDE_CONFIG_DIR, else ~/.claude. cchooks' own data lives in <that folder>/cchooks.
+    """
+    env_dir = os.environ.get("CLAUDE_CONFIG_DIR")
+    default = os.path.expanduser(env_dir) if env_dir else os.path.join(util.home(), ".claude")
+    chosen = flag
+    if not chosen and interactive:
+        try:
+            ans = input("Claude Code config folder [%s]: " % default).strip()
+        except EOFError:
+            ans = ""
+        chosen = ans or default
+    chosen = os.path.abspath(os.path.expanduser(chosen or default))
+    os.environ["CLAUDE_CONFIG_DIR"] = chosen
+    if not os.environ.get("CCHOOKS_HOME") or flag:
+        os.environ["CCHOOKS_HOME"] = os.path.join(chosen, "cchooks")
+    standard = os.path.abspath(os.path.join(util.home(), ".claude"))
+    if chosen != standard and (not env_dir or os.path.abspath(os.path.expanduser(env_dir)) != chosen):
+        print("Note: Claude Code only reads %s when CLAUDE_CONFIG_DIR is set to it in the environment\n"
+              "      you launch `claude` from (e.g. add  export CLAUDE_CONFIG_DIR=\"%s\"  to your shell profile)."
+              % (chosen, chosen))
+    return chosen
+
+
 def lib_dir() -> str:
     return os.path.join(util.data_dir(), "lib")
 
@@ -162,7 +189,8 @@ def resolve_retention(flag: Optional[int], interactive: bool) -> int:
         print("  Please enter a whole number of days (0 to never delete).")
 
 
-def _write_default_config(mode: Optional[str], retention_days: int) -> str:
+def _write_default_config(mode: Optional[str], retention_days: int,
+                          statusline: Optional[Dict[str, Any]] = None) -> str:
     path = config.user_config_path()
     existing = _read_user_config()
     if mode:
@@ -172,6 +200,8 @@ def _write_default_config(mode: Optional[str], retention_days: int) -> str:
     existing.setdefault("_comment", "Overrides for cchooks defaults. Modes: off | warn | enforce. "
                                     "See README for every setting.")
     existing["retention_days"] = retention_days
+    if statusline:
+        existing["statusline"] = statusline
     _write_json(path, existing)
     return path
 
@@ -265,9 +295,116 @@ def apply_template(plan: List[Tuple[str, str, str, str]], stamp: str) -> None:
         print("  %-11s %s" % ("replaced" if action == "replace" else "added", rel))
 
 
+# --------------------------------------------------------------- statusline
+
+STATUSLINE_VARIANTS = ("auto", "subscription", "api")
+GLYPH_SETS = ("basic", "ascii", "nerd")
+
+
+def _is_our_statusline(sl: Any) -> bool:
+    return isinstance(sl, dict) and "cchooks" in str(sl.get("command", "")) and "statusline" in str(sl.get("command", ""))
+
+
+def _win_short(path: str) -> str:
+    """8.3 short form (no spaces) where the volume supports it."""
+    try:
+        import ctypes
+        buf = ctypes.create_unicode_buffer(1024)
+        if ctypes.windll.kernel32.GetShortPathNameW(path, buf, 1024):
+            return buf.value
+    except (AttributeError, OSError, ValueError):
+        pass
+    return path
+
+
+def _git_bash_present() -> bool:
+    if os.environ.get("CLAUDE_CODE_GIT_BASH_PATH"):
+        return True
+    git = shutil.which("git")
+    if not git:
+        return False
+    root = os.path.dirname(os.path.dirname(git))
+    return any(os.path.exists(os.path.join(root, *p)) for p in (("bin", "bash.exe"), ("usr", "bin", "bash.exe")))
+
+
+def statusline_command(python: str, cli: str) -> Tuple[str, str]:
+    """(command string, note). The status line runs through a shell: sh on macOS/Linux, and on
+    Windows Git Bash if installed, else PowerShell. The Windows form avoids backslashes (Git Bash
+    eats them) and, where possible, spaces (quoting differs between the two shells)."""
+    if not util.IS_WINDOWS:
+        return '"%s" -I "%s" statusline' % (python, cli), ""
+    py, script = (_win_short(p).replace("\\", "/") for p in (python, cli))
+    if " " not in py and " " not in script:
+        return "%s -I %s statusline" % (py, script), ""
+    if _git_bash_present():
+        return ('"%s" -I "%s" statusline' % (py, script),
+                "status line command is quoted for Git Bash; re-run the installer if you uninstall Git")
+    return ("& '%s' -I '%s' statusline" % (py, script),
+            "status line command is quoted for PowerShell; re-run the installer if you install Git for Windows")
+
+
+def _ask(prompt: str, choices: Dict[str, str], default: str) -> str:
+    while True:
+        try:
+            a = input(prompt).strip().lower()
+        except EOFError:
+            return default
+        if not a:
+            return default
+        if a in choices:
+            return choices[a]
+        print("  Please answer one of: %s" % ", ".join(sorted(choices)))
+
+
+def resolve_statusline(flag: Optional[str], existing: Any, current_variant: Optional[str],
+                       interactive: bool) -> Tuple[Optional[str], str]:
+    """Returns (variant to install or None, reason). flag: None (not given), 'none', or a variant."""
+    if flag == "none":
+        return None, "skipped (--statusline none)"
+    if flag in STATUSLINE_VARIANTS:
+        return flag, ""
+    if _is_our_statusline(existing):
+        return current_variant or "auto", ""
+    if not interactive:
+        if existing:
+            return None, "kept your existing status line (use --statusline auto|subscription|api to replace it)"
+        return "auto", ""
+    print("\ncchooks includes a status line: folder, git branch, model and context use, plus cost and\n"
+          "rate limits where Claude Code provides them. It uses only characters every standard font has.")
+    print("  1) auto          show whatever your login type provides (recommended)")
+    print("  2) subscription  Pro/Max/Team login: context, cost and 5h/7d rate limits")
+    print("  3) api           API-key login: context only")
+    print("  4) none          don't install a status line")
+    variant = _ask("Status line [1]: ", {"1": "auto", "2": "subscription", "3": "api", "4": "none",
+                                         "auto": "auto", "subscription": "subscription", "api": "api",
+                                         "none": "none"}, "auto")
+    if variant == "none":
+        return None, "skipped"
+    if existing:
+        cmd = util.truncate(str(existing.get("command", existing)) if isinstance(existing, dict) else str(existing), 70)
+        yn = _ask("You already have a status line (%s). Replace it? It will be restored if you uninstall. [y/N]: "
+                  % cmd, {"y": "y", "yes": "y", "n": "n", "no": "n"}, "n")
+        if yn != "y":
+            return None, "kept your existing status line"
+    return variant, ""
+
+
+def _migrate_reserve() -> Optional[int]:
+    """Reuse a calibrated RIGHT_RESERVE from the bash status line's ~/.claude/statusline.conf."""
+    try:
+        with open(os.path.join(util.claude_dir(), "statusline.conf"), "r", encoding="utf-8") as f:
+            for line in f:
+                m = __import__("re").match(r"\s*RIGHT_RESERVE=(\d+)\s*$", line)
+                if m:
+                    return int(m.group(1))
+    except OSError:
+        pass
+    return None
+
+
 def install(repo_root: str, scope: str = "user", project: Optional[str] = None, mode: Optional[str] = None,
-            statusline: bool = False, template: Optional[str] = None, dry_run: bool = False,
-            retention_days: Optional[int] = None) -> int:
+            statusline: Optional[str] = None, template: Optional[str] = None, dry_run: bool = False,
+            retention_days: Optional[int] = None, glyphs: Optional[str] = None) -> int:
     if sys.version_info < MIN_PY:
         print("cchooks needs Python %d.%d+; this is %s" % (MIN_PY + (sys.version.split()[0],)))
         return 1
@@ -311,8 +448,14 @@ def install(repo_root: str, scope: str = "user", project: Optional[str] = None, 
     if retention_days is not None and retention_days < 0:
         print("--retention-days must be 0 (never delete) or a positive number of days.")
         return 1
-    retention = resolve_retention(retention_days, interactive=sys.stdin.isatty() and not dry_run)
+    interactive = sys.stdin.isatty() and not dry_run
+    retention = resolve_retention(retention_days, interactive=interactive)
+    user_cfg = _read_user_config()
+    sl_cfg = dict(user_cfg.get("statusline") or {})
+    existing_sl = settings.get("statusLine") if not starter.get("statusLine") else starter.get("statusLine")
+    variant, sl_note = resolve_statusline(statusline, existing_sl, sl_cfg.get("variant"), interactive)
     if dry_run:
+        print("Would %s" % ("install the %s status line" % variant if variant else "leave the status line alone"))
         print("Would keep session data for %s" % ("ever (no auto-delete)" if retention == 0 else "%d days" % retention))
         print("Would register cchooks hooks for %s in %s using %s" % (", ".join(e for e, _ in EVENTS), spath, python))
         print("Dry run: nothing was changed.")
@@ -332,31 +475,52 @@ def install(repo_root: str, scope: str = "user", project: Optional[str] = None, 
     hooks = settings.setdefault("hooks", {})
     for event, groups in hook_entries(python).items():
         hooks.setdefault(event, []).extend(groups)
-    notes = []
-    if statusline:
-        if settings.get("statusLine") and "cli.py" not in json.dumps(settings.get("statusLine")):
-            notes.append("statusLine already configured; left it alone. Use `cli.py statusline` in yours.")
-        elif util.IS_WINDOWS:
-            notes.append("On Windows, add the status line by hand; see README (quoting differs per shell).")
+    notes = [sl_note] if sl_note else []
+    old_info = _install_info()
+    previous_sl = old_info.get("previous_statusline")
+    if variant:
+        current = settings.get("statusLine")
+        if current and not _is_our_statusline(current):
+            previous_sl = current  # restored on uninstall
+        cmd_str, note = statusline_command(python, os.path.join(lib_dir(), "cli.py"))
+        settings["statusLine"] = {"type": "command", "command": cmd_str, "padding": 0, "refreshInterval": 2}
+        if note:
+            notes.append(note)
+        sl_cfg["variant"] = variant
+        if glyphs:
+            sl_cfg["glyphs"] = glyphs
+        sl_cfg.setdefault("glyphs", "basic")
+        if "right_reserve" not in sl_cfg:
+            migrated = _migrate_reserve()
+            if migrated is not None:
+                sl_cfg["right_reserve"] = migrated
+                notes.append("reused RIGHT_RESERVE=%d from ~/.claude/statusline.conf" % migrated)
+    elif statusline == "none" and _is_our_statusline(settings.get("statusLine")):
+        if previous_sl:
+            settings["statusLine"] = previous_sl
         else:
-            settings["statusLine"] = {"type": "command", "command": '"%s" -I "%s" statusline'
-                                      % (python, os.path.join(lib_dir(), "cli.py"))}
+            settings.pop("statusLine", None)
+        previous_sl = None
     _write_json(spath, settings)
 
-    prev = _install_info().get("settings_paths") or []
+    prev = old_info.get("settings_paths") or []
     info = {"version": __version__, "python": python, "lib_dir": lib_dir(), "settings_path": spath,
-            "settings_paths": list(dict.fromkeys(prev + [spath])), "scope": scope, "installed_at": time.time(), "manifest": manifest}
+            "settings_paths": list(dict.fromkeys(prev + [spath])), "scope": scope, "installed_at": time.time(),
+            "previous_statusline": previous_sl, "manifest": manifest}
     _write_json(os.path.join(util.data_dir(), "install.json"), info)
-    cfg_path = _write_default_config(mode, retention)
+    cfg_path = _write_default_config(mode, retention, sl_cfg if variant else None)
     cmd = _install_command(repo_root)
 
     print("Installed cchooks %s" % __version__)
+    print("  claude dir  : %s" % util.claude_dir())
     print("  interpreter : %s (Python %s)" % (python, sys.version.split()[0]))
     print("  code        : %s" % lib_dir())
     print("  hooks in    : %s" % spath)
     print("  config      : %s" % cfg_path)
     print("  session data: %s" % ("kept forever (auto-delete off)" if retention == 0
                                   else "deleted after %d days unused" % retention))
+    print("  status line : %s" % ("%s (%s glyphs)" % (variant, sl_cfg.get("glyphs", "basic")) if variant
+                                   else "not installed"))
     if cmd:
         print("  command     : /cchooks-report")
     for n in notes:
@@ -403,9 +567,12 @@ def uninstall(keep_data: bool = False) -> int:
             settings = _load_settings(spath)
             n = strip_hooks(settings)
             sl = settings.get("statusLine")
-            removed_sl = isinstance(sl, dict) and "cchooks" in json.dumps(sl)
+            removed_sl = _is_our_statusline(sl)
             if removed_sl:
-                settings.pop("statusLine")
+                if info.get("previous_statusline"):
+                    settings["statusLine"] = info["previous_statusline"]
+                else:
+                    settings.pop("statusLine")
             if n or removed_sl:
                 _write_json(spath, settings)
             print("Removed %d cchooks hook entries%s from %s" % (n, " and the status line" if removed_sl else "", spath))

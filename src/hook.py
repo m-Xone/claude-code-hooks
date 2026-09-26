@@ -39,7 +39,8 @@ def main():
         out, code, err = engine.run(event)
     except Exception as e:  # noqa: BLE001 - last line of defence
         name = event.get("hook_event_name", arg_event)
-        base = os.environ.get("CCHOOKS_HOME") or os.path.join(os.path.expanduser("~"), ".claude", "cchooks")
+        # this file lives in <claude dir>/cchooks/lib/, which works for custom config folders too
+        base = os.environ.get("CCHOOKS_HOME") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         fail_open = os.path.exists(os.path.join(base, "FAIL_OPEN"))
         msg = "cchooks crashed (%s: %s)." % (type(e).__name__, e)
         if name in GATING_EVENTS and not fail_open:
