@@ -38,6 +38,7 @@ def protected_patterns(ctx: Context) -> List[str]:
     return [
         cd + "/settings.json", cd + "/settings.local.json",
         "**/.claude/settings.json", "**/.claude/settings.local.json", "**/.claude/cchooks.json",
+        "**/.claude/cchooks-rules/**", "**/.claude/cchooks-rules",
         dd + "/**", dd,
         "/Library/Application Support/ClaudeCode/**", "/etc/claude-code/**",
         "C:/Program Files/ClaudeCode/**", "C:/ProgramData/ClaudeCode/**",
@@ -49,7 +50,33 @@ DISABLE_HOOKS = re.compile(r"disableAllHooks[\"']?\s*[:=]+\s*\$?true", re.IGNORE
 # `<python> [-I] ".../cchooks/lib/cli.py" report` etc., with nothing chained after it
 READ_ONLY_CLI = re.compile(
     r"^\s*&?\s*[\"']?[^\"';&|<>]*[\"']?\s+(?:-I\s+)?[\"']?[^\"';&|<>]*cchooks[\\/]lib[\\/]cli\.py[\"']?\s+"
-    r"(?:report|status|doctor|selftest|help)\b[^;&|<>`$]*$", re.IGNORECASE)
+    r"(?:report|status|rules|rule\s+(?:test|replay|show|drafts)|doctor|selftest|help)\b[^;&|<>`$]*$", re.IGNORECASE)
+# `cli.py rule add|mode|remove ...` on its own: the user approves each change to their rules
+RULE_CHANGE_CLI = re.compile(r"cchooks[\\/]lib[\\/]cli\.py[\"']?\s+rule\s+(add|mode|remove)\b(.*)$", re.IGNORECASE)
+
+
+def _rule_change(ctx: Context):
+    cmd = ctx.command.strip()
+    m = RULE_CHANGE_CLI.search(cmd)
+    if not m or re.search(r"[;&|`<>\n]|\$\(", cmd):
+        return None  # chained or redirected: fall through to the general checks
+    verb, rest = m.group(1).lower(), [t.strip("'\"") for t in util.tokenize(m.group(2))]
+    target = next((t for t in rest if not t.startswith("--")), "")
+    if verb == "add":
+        from ..rulelab import load_file
+        from ..rules import RuleError, describe
+        try:
+            r = load_file(util.norm_path(target, ctx.cwd) if target else "")
+            what = "install the custom rule '%s':\n  %s" % (r.id, describe(r))
+            if "--replace" in rest:
+                what += "\n  (replacing the installed rule with the same id)"
+        except RuleError as e:
+            what = "install a custom rule from %s, which is not valid (%s)" % (target, e)
+    elif verb == "mode":
+        what = "set custom rule '%s' to %s mode" % (target, rest[1] if len(rest) > 1 else "?")
+    else:
+        what = "delete custom rule '%s'" % target
+    return ctx.finding("ask", reason="Claude wants to %s" % what, audit_detail=util.truncate(cmd, 300))
 
 
 def _hit(path: str, ctx: Context) -> Optional[str]:
@@ -138,6 +165,9 @@ def pre_tool(ctx: Context):
                                audit_detail=util.truncate(cmd, 300))
         if READ_ONLY_CLI.match(cmd):
             return None
+        change = _rule_change(ctx)
+        if change:
+            return change
         verdict, hits = shell_verdict(util.neutralize(cmd), ctx)
         if verdict == "deny":
             return ctx.finding(

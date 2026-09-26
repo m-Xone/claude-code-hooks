@@ -141,10 +141,15 @@ class InstallerEndToEnd(unittest.TestCase):
         self.assertEqual(self.read()["model"], "opus")
         home = self.env["CCHOOKS_HOME"]
         self.assertTrue(os.path.isdir(os.path.join(home, "lib")))
+        with open(os.path.join(claude, "commands", "cchooks-new.md")) as f:
+            wizard = f.read()
+        self.assertNotIn("{{CLI}}", wizard)
+        self.assertIn(os.path.join(home, "lib", "cli.py"), wizard)
         r = self.installer("--uninstall")
         self.assertEqual(r.returncode, 0, r.stdout)
         self.assertFalse(os.path.exists(home))
-        self.assertFalse(os.path.exists(os.path.join(claude, "commands", "cchooks-report.md")))
+        for name in ("cchooks-report.md", "cchooks-new.md", "cchooks-rules.md"):
+            self.assertFalse(os.path.exists(os.path.join(claude, "commands", name)))
         self.assertNotIn("--cchooks", self.raw())
         self.assertEqual(self.read()["model"], "opus")
 

@@ -21,7 +21,7 @@ MODES = ("off", "warn", "enforce")
 
 SECURITY_CHECKS = (
     "prompt_gate", "sensitive_paths", "destructive_commands", "injection_tripwire",
-    "egress_guard", "secret_leaks", "tamper_guard",
+    "egress_guard", "secret_leaks", "tamper_guard", "custom_rules",
 )
 USABILITY_CHECKS = (
     "cost_ledger", "subagent_governor", "slop_detector", "verification_gate", "loop_detector",
@@ -88,6 +88,10 @@ DEFAULTS: Dict[str, Any] = {
         "tamper_guard": {
             "mode": "enforce",
             "extra_patterns": [],
+        },
+        "custom_rules": {
+            "mode": "enforce",          # caps every rule: "warn" here turns all rules into warnings
+            "project_rules": True,      # also load <project>/.claude/cchooks-rules/*.json (no regexes)
         },
         "cost_ledger": {"mode": "enforce", "statusline_top_tools": 2},
         "subagent_governor": {

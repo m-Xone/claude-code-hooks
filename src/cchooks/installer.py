@@ -206,18 +206,26 @@ def _write_default_config(mode: Optional[str], retention_days: int,
     return path
 
 
-def _install_command(repo_root: str) -> Optional[str]:
-    src = os.path.join(repo_root, "commands", "cchooks-report.md")
-    if not os.path.exists(src):
-        return None
+COMMANDS = ("cchooks-report.md", "cchooks-new.md", "cchooks-rules.md")
+
+
+def _install_command(repo_root: str) -> List[str]:
+    """Copy the slash commands into <claude dir>/commands, with the CLI path filled in."""
     dest_dir = os.path.join(util.claude_dir(), "commands")
-    os.makedirs(dest_dir, exist_ok=True)
-    with open(src, "r", encoding="utf-8") as f:
-        text = f.read().replace("{{CLI}}", '"%s" -I "%s"' % (sys.executable, os.path.join(lib_dir(), "cli.py")))
-    dest = os.path.join(dest_dir, "cchooks-report.md")
-    with open(dest, "w", encoding="utf-8") as f:
-        f.write(text)
-    return dest
+    cli = '"%s" -I "%s"' % (sys.executable, os.path.join(lib_dir(), "cli.py"))
+    done = []
+    for name in COMMANDS:
+        src = os.path.join(repo_root, "commands", name)
+        if not os.path.exists(src):
+            continue
+        os.makedirs(dest_dir, exist_ok=True)
+        with open(src, "r", encoding="utf-8") as f:
+            text = f.read().replace("{{CLI}}", cli)
+        dest = os.path.join(dest_dir, name)
+        with open(dest, "w", encoding="utf-8") as f:
+            f.write(text)
+        done.append("/" + name[:-3])
+    return done
 
 
 # ----------------------------------------------------------------- template
@@ -522,7 +530,7 @@ def install(repo_root: str, scope: str = "user", project: Optional[str] = None, 
     print("  status line : %s" % ("%s (%s glyphs)" % (variant, sl_cfg.get("glyphs", "basic")) if variant
                                    else "not installed"))
     if cmd:
-        print("  command     : /cchooks-report")
+        print("  commands    : %s" % ", ".join(cmd))
     for n in notes:
         print("  note        : " + n)
     ok = selftest(verbose=True)
@@ -552,7 +560,7 @@ def uninstall(keep_data: bool = False) -> int:
     """Remove everything cchooks added to ~/.claude.
 
     Removes: hook entries from every settings.json cchooks was installed into (and the user
-    settings.json regardless), the cchooks status line, /cchooks-report, and ~/.claude/cchooks/
+    settings.json regardless), the cchooks status line, the /cchooks-* commands, and ~/.claude/cchooks/
     (code, config, state, logs) unless keep_data. Never removes settings backups or files that
     came from a starter template: those are the user's.
     """
@@ -578,10 +586,11 @@ def uninstall(keep_data: bool = False) -> int:
             print("Removed %d cchooks hook entries%s from %s" % (n, " and the status line" if removed_sl else "", spath))
         except (OSError, ValueError) as e:
             print("Could not update %s: %s" % (spath, e))
-    cmd = os.path.join(util.claude_dir(), "commands", "cchooks-report.md")
-    if os.path.exists(cmd):
-        os.remove(cmd)
-        print("Removed /cchooks-report")
+    for name in COMMANDS:
+        cmd = os.path.join(util.claude_dir(), "commands", name)
+        if os.path.exists(cmd):
+            os.remove(cmd)
+            print("Removed /" + name[:-3])
     if keep_data:
         shutil.rmtree(lib_dir(), ignore_errors=True)
         for fn in ("install.json", "allow-config-change"):

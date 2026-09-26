@@ -6,6 +6,15 @@
   cli.py statusline [--variant auto|subscription|api] [--glyphs basic|ascii|nerd]
                                                          status line (reads Claude Code JSON on stdin)
   cli.py ruler [on|off]                                  calibrate the status line's right-edge reserve
+  cli.py rules [PROJECT_DIR]                             list custom rules and report invalid ones
+  cli.py rule test FILE|ID                               validate a rule, run its examples, time its regexes
+  cli.py rule replay FILE|ID [--sessions N] [--all-projects] [--project DIR]
+                                                         how often it would have fired in past sessions
+  cli.py rule show ID                                    print an installed rule
+  cli.py rule add FILE [--replace]                       install a draft (tests must pass)
+  cli.py rule mode ID off|warn|enforce                   change an installed rule's mode
+  cli.py rule remove ID                                  delete an installed rule
+  cli.py rule drafts                                     print the drafts folder the wizard uses
   cli.py doctor                                          health check + self-test
   cli.py selftest
   cli.py uninstall [--keep-data]
@@ -200,6 +209,108 @@ def status(args):
     return 0
 
 
+def rules(args):
+    from cchooks import rules as rules_mod
+    project = args[0] if args else os.getcwd()
+    total_problems = 0
+    for origin, path in (("user", rules_mod.user_rules_dir()), ("project", rules_mod.project_rules_dir(project))):
+        found, problems = rules_mod.load_dir(path, origin)
+        total_problems += len(problems)
+        print("%s rules (%s): %d" % (origin, path, len(found)))
+        for r in found:
+            tools = " [%s]" % ",".join(r.tools) if r.tools else ""
+            print("  %-24s %-7s %-16s %-6s %s" % (r.id, r.mode, r.event + tools, r.action,
+                                                  util.truncate(r.description or r.message, 60)))
+        for p in problems:
+            print("  INVALID %s" % p)
+    return 1 if total_problems else 0
+
+
+def _fmt_sample(sample):
+    text = sample if isinstance(sample, str) else json.dumps(sample, ensure_ascii=False)
+    return util.truncate(text.replace("\n", " "), 90)
+
+
+def rule(args):
+    from cchooks import rulelab, rules as rules_mod
+    if not args:
+        print(__doc__)
+        return 2
+    sub, rest = args[0], args[1:]
+    opt = lambda name, default=None: rest[rest.index(name) + 1] if name in rest and rest.index(name) + 1 < len(rest) \
+        else default  # noqa: E731
+    target = next((a for a in rest if not a.startswith("--")), "")
+    if sub == "drafts":
+        print(rulelab.drafts_dir())
+        return 0
+    if sub in ("mode", "remove", "show") and not target:
+        print("usage: cli.py rule %s ID%s" % (sub, " off|warn|enforce" if sub == "mode" else ""))
+        return 2
+    if sub == "mode":
+        ok, msg = rulelab.set_mode(target, rest[1] if len(rest) > 1 else "")
+        print(("Rule '%s' is now %s (%s). Takes effect on the next event." % (target, rest[1], msg)) if ok else msg)
+        return 0 if ok else 1
+    if sub == "remove":
+        ok, msg = rulelab.remove(target)
+        print(("Removed rule '%s' (%s)." % (target, msg)) if ok else msg)
+        return 0 if ok else 1
+    path = rulelab.find_draft(target) if target else None
+    if not path:
+        print("No rule file or installed rule called %r." % target)
+        return 2
+    try:
+        r = rulelab.load_file(path)
+    except rules_mod.RuleError as e:
+        print("INVALID: %s" % e)
+        return 2
+    if sub == "show":
+        with open(path, encoding="utf-8") as f:
+            print(f.read().rstrip())
+        print("\n" + rules_mod.describe(r))
+        return 0
+    if sub == "test":
+        print("Rule '%s' is valid." % r.id)
+        print("  " + rules_mod.describe(r))
+        results = rulelab.run_tests(r, os.getcwd())
+        if results:
+            print("\nExamples:")
+            for expect, sample, ok in results:
+                note = "" if ok else ("  <- should match but doesn't" if expect == "hit" else "  <- matches but shouldn't")
+                print("  %-4s %-4s %s%s" % ("ok" if ok else "FAIL", expect, _fmt_sample(sample), note))
+        else:
+            print("\nNo examples: add \"tests\": {\"hit\": [...], \"miss\": [...]} to check the rule.")
+        verdict, detail = rulelab.timing_check(r)
+        print("\nSpeed: %s (%s)" % (verdict, detail))
+        passed = sum(1 for t in results if t[2])
+        print("Result: %d/%d examples pass%s" % (passed, len(results), "" if verdict == "ok" else ", speed " + verdict))
+        return 0 if passed == len(results) and verdict != "hang" else 1
+    if sub == "replay":
+        try:
+            n = int(opt("--sessions", "20"))
+        except ValueError:
+            n = 20
+        res = rulelab.replay(r, opt("--project", os.getcwd()), sessions=n, all_projects="--all-projects" in rest)
+        print("Replayed '%s' against %d recent session(s) in %s." % (r.id, res["sessions"], res["where"]))
+        print("  %d matching event(s) checked, %d would have fired (in %d session(s)), %.1fs."
+              % (res["events"], res["hits"], res["sessions_hit"], res["seconds"]))
+        for ex in res["examples"]:
+            print("  " + ex)
+        if res["sessions"] == 0:
+            print("  No past sessions found for this project; try --all-projects.")
+        return 0
+    if sub == "add":
+        ok, msg = rulelab.add(path, replace="--replace" in rest)
+        if not ok:
+            print(msg)
+            return 1
+        installed = rulelab.load_file(msg)
+        print("Installed rule '%s' in %s mode: %s" % (installed.id, installed.mode, msg))
+        print("  " + rules_mod.describe(installed))
+        return 0
+    print("unknown rule command %r" % sub)
+    return 2
+
+
 def main(argv):
     cmd, args = (argv[0], argv[1:]) if argv else ("status", [])
     if cmd == "report":
@@ -212,6 +323,10 @@ def main(argv):
         return untaint(args)
     if cmd == "status":
         return status(args)
+    if cmd == "rules":
+        return rules(args)
+    if cmd == "rule":
+        return rule(args)
     from cchooks import installer
     if cmd == "doctor":
         return installer.doctor()
