@@ -46,7 +46,7 @@ def main():
                    help="install only the hooks: ignore --template, touch nothing in ~/.claude except the hook "
                         "entries in settings.json (backed up first) and cchooks' own folder")
     p.add_argument("--uninstall", action="store_true",
-                   help="remove everything cchooks added: hook entries, status line, /cchooks-report and "
+                   help="remove everything cchooks added: hook entries, status line, the /cchooks-* commands and "
                         "~/.claude/cchooks (code, config, state, logs)")
     p.add_argument("--keep-data", action="store_true", help="with --uninstall: keep config, logs and state")
     p.add_argument("--doctor", action="store_true", help="health check and self-test")

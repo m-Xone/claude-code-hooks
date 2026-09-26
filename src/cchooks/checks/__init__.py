@@ -2,6 +2,7 @@
 
 from . import (
     cost_ledger,
+    custom_rules,
     destructive_commands,
     egress_guard,
     injection_tripwire,
@@ -23,6 +24,7 @@ ALL = [
     secret_leaks,          # 6
     injection_tripwire,    # 4
     egress_guard,          # 5
+    custom_rules,          # 13: user-written rules, after the built-in security checks
     subagent_governor,     # 9
     loop_detector,         # 12
     cost_ledger,           # 8

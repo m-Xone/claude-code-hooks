@@ -46,6 +46,7 @@ sh install.sh --uninstall        # or: .\install.ps1 --uninstall
 | Injection tripwire | Spots instructions hidden in web pages, MCP results and downloads, including invisible Unicode. It warns Claude and marks the session *tainted*. |
 | Egress guard | Asks before data leaves your machine: uploads, paste sites, webhooks, encoded payloads in URLs. While the session is tainted it asks before any network call. Never lets secrets go out. |
 | Tamper guard | Stops Claude editing Claude Code settings or these hooks. Warns if the installed hook files change. |
+| Custom rules | Your own checks. `/cchooks-new` builds one with you through a short interview. See [Custom rules](#custom-rules). |
 
 **Usability**
 
@@ -78,7 +79,7 @@ The `!` prefix makes you the one running it; Claude is blocked from clearing the
 - *exact* token totals per model and per subagent;
 - *estimated* per-tool costs: how much context each tool added, its failure rate and its latency.
 
-**Other commands.** `cli.py` also has `status` (modes, session state, recent audit events), `doctor` (health check) and `ruler` (see [Status line](#status-line)).
+**Other commands.** `cli.py` also has `status` (modes, session state, recent audit events), `rules` and `rule` (see [Custom rules](#custom-rules)), `doctor` (health check) and `ruler` (see [Status line](#status-line)).
 
 ## Install options
 
@@ -165,6 +166,78 @@ All settings, with their defaults, are listed in [`src/cchooks/config.py`](src/c
 
 A repository can add its own `.claude/cchooks.json`. For security checks it can only make them *stricter*, because you might open a repository you don't trust. Usability settings, such as which test command the verification gate looks for, can be set freely per project.
 
+## Custom rules
+
+Run **`/cchooks-new`** in Claude Code, optionally followed by what you want to catch (`/cchooks-new keep patient record numbers out of prompts`). Claude interviews you with multiple-choice questions. Each option has a preview of what it would look like when the rule fires.
+
+Before the rule is installed, Claude tests it two ways:
+- **Examples:** it writes examples the rule should and shouldn't match, and checks the rule gets each one right.
+- **History:** it replays the rule against your recent sessions to show how often it would have fired.
+
+Claude Code then asks you to approve the install, and shows a plain-English summary of the rule. **`/cchooks-rules`** lists your rules and switches them between warn, enforce and off, or deletes them.
+
+The same tools work from the command line. Run `cli.py rule` with:
+- `test FILE` to check a draft
+- `replay FILE` to see how often it would have fired
+- `add FILE` to install it
+- `mode ID enforce` or `remove ID` to change an installed rule
+
+### Rule format
+
+Each rule is one JSON file in `~/.claude/cchooks/rules/`. It says when to look, what to look for and what to do:
+
+```json
+{
+  "id": "prod-kubectl",
+  "event": "PreToolUse",
+  "tools": ["Bash", "PowerShell"],
+  "when": [
+    {"field": "command", "words": ["kubectl"]},
+    {"field": "command", "regex": "--context[= ]prod"},
+    {"field": "command", "words": ["--dry-run"], "not": true}
+  ],
+  "action": "ask",
+  "message": "kubectl against the prod cluster.",
+  "mode": "warn",
+  "tests": {"hit": ["kubectl --context=prod delete pod x"], "miss": ["kubectl --context=prod get pods --dry-run"]}
+}
+```
+
+All conditions must match. `"not": true` turns a condition into "does not match".
+
+| Event | Fields | Actions |
+|---|---|---|
+| `UserPromptSubmit` | `prompt` | `block`, `warn`, `context` |
+| `PreToolUse` | `command`, `path`, `content`, `url`, `input` | `deny`, `ask`, `warn`, `context` |
+| `PostToolUse` | `command`, `path`, `url`, `input`, `output` | `redact`, `warn`, `context` |
+| `Stop`, `SubagentStop` | `message` | `block` (Claude keeps working), `warn` |
+
+The fields:
+- `path` covers file tools and the paths in shell commands.
+- `content` is the text being written by Write or Edit.
+- `input` is any argument of any tool, including MCP tools.
+- `output` is the tool's result.
+
+Each condition uses one of these match types:
+- `words`: a list of whole words.
+- `regex`: a regular expression.
+- `glob`: path patterns, for the `path` field only.
+- `detector`: `secrets`, `pii` or `injection`, which reuse the built-in detectors.
+
+**Other rule settings:**
+- **`tools`** restricts a rule to certain tools. Globs such as `mcp__slack__*` work.
+- **`message`** is what Claude or you will see when the rule fires.
+- **`override`**: a blocked prompt can still be sent with `[[allow-sensitive]]` unless `"override": false`.
+- **`tests`**: examples the rule should (`hit`) and shouldn't (`miss`) match. `rule add` refuses a rule whose examples fail.
+
+**Behaviour:**
+- **Warn first:** new rules default to `"mode": "warn"`. Switch one to `enforce` once `cli.py rules` and the warnings show it catches what you meant.
+- **Stricter only:** rules have no "allow" action, so they can never loosen the built-in checks.
+- **Slow regexes:** regexes likely to hang (like `(a+)+`) are refused, and `rule test` times each regex against worst-case input.
+- **Claude can't edit them:** the tamper guard stops Claude writing rule files directly. Installing, switching or deleting a rule through `cli.py` needs your approval each time.
+- **Invalid files:** a file that doesn't validate is skipped, and you're told at the start of the next session.
+- **Project rules:** a repository can ship rules in `.claude/cchooks-rules/`. Because you might open a repository you don't trust, those rules can't use `regex`, and `"project_rules": false` under `custom_rules` in `config.json` turns them off.
+
 ## Session data
 
 Each Claude Code session gets a small folder in `~/.claude/cchooks/state/`. It holds the token stats, taint flag, subagent counts and loop history, so each new session starts from zero. Old folders are deleted automatically:
@@ -196,7 +269,7 @@ Per-tool token figures are estimates. Per-model and per-subagent totals are exac
 ## Development
 
 ```sh
-cd tests && python3 -m unittest      # 95 tests, including end-to-end installs into temp directories
+cd tests && python3 -m unittest      # 116 tests, including end-to-end installs into temp directories
 ```
 
 - `src/hook.py` is the hook entry point.

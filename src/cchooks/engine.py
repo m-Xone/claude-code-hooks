@@ -154,6 +154,8 @@ def run(event: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], int, str]:
             f = _apply_mode(f, mode, name)
             if f.audit_detail:
                 state.audit(event, f.check, f.action, f.audit_detail)
+            if f.action == "redact" and f.updated_output is not None:
+                event["tool_response"] = f.updated_output  # later checks redact on top of this one
             findings.append(f)
 
     if name == "SessionStart":
