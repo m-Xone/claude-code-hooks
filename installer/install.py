@@ -3,7 +3,7 @@ pick the Python interpreter; you can also run it directly with the Python
 you want the hooks to use:
 
     python3 installer/install.py [--scope user|project] [--project DIR]
-                                 [--mode warn|enforce] [--statusline]
+                                 [--mode warn|enforce] [--statusline] [--retention-days N]
     python3 installer/install.py --hooks-only        # ignore any starter template
     python3 installer/install.py --uninstall [--keep-data]
     python3 installer/install.py --doctor
@@ -34,6 +34,9 @@ def main():
                    help="starter ~/.claude to deploy first: settings.json is merged (your values win, lists "
                         "unioned); other existing files are backed up to .bak-<timestamp> and replaced")
     p.add_argument("--dry-run", action="store_true", help="show what would change, change nothing")
+    p.add_argument("--retention-days", type=int, metavar="N",
+                   help="auto-delete per-session data after N days unused; 0 = never. Asked interactively "
+                        "if omitted (default: current setting, or 30)")
     p.add_argument("--hooks-only", action="store_true",
                    help="install only the hooks: ignore --template, touch nothing in ~/.claude except the hook "
                         "entries in settings.json (backed up first) and cchooks' own folder")
@@ -48,7 +51,8 @@ def main():
     if a.doctor:
         return installer.doctor()
     return installer.install(REPO, scope=a.scope, project=a.project, mode=a.mode, statusline=a.statusline,
-                             template=None if a.hooks_only else a.template, dry_run=a.dry_run)
+                             template=None if a.hooks_only else a.template, dry_run=a.dry_run,
+                             retention_days=a.retention_days)
 
 
 if __name__ == "__main__":

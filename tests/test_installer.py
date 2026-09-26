@@ -154,6 +154,18 @@ class InstallerEndToEnd(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
         self.assertNotIn("SessionStart", self.raw())
 
+    def test_retention_flag_and_reinstall_keeps_it(self):
+        r = self.installer("--retention-days", "0")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertIn("kept forever", r.stdout)
+        cfg = os.path.join(self.env["CCHOOKS_HOME"], "config.json")
+        with open(cfg) as f:
+            self.assertEqual(json.load(f)["retention_days"], 0)
+        r = self.installer()  # non-interactive reinstall keeps the earlier choice
+        with open(cfg) as f:
+            self.assertEqual(json.load(f)["retention_days"], 0)
+        self.assertNotEqual(self.installer("--retention-days", "-3").returncode, 0)
+
     def test_malformed_settings_aborts(self):
         with open(self.settings, "w") as f:
             f.write("{not json")

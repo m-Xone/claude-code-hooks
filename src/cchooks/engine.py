@@ -156,6 +156,14 @@ def run(event: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], int, str]:
                 state.audit(event, f.check, f.action, f.audit_detail)
             findings.append(f)
 
+    if name == "SessionStart":
+        try:
+            n = state.prune_sessions(float(cfg.get("retention_days", 30) or 0), keep=event.get("session_id") or "")
+            if n:
+                state.audit(event, "housekeeping", "prune", "deleted %d session folder(s) older than %s days"
+                            % (n, cfg.get("retention_days")))
+        except (TypeError, ValueError):
+            pass
     findings += _pending_notices(event)
     out, code, err = render(name, findings)
     if name == "PreToolUse" and event.get("tool_name") in ("Agent", "Task") and \

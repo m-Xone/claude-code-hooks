@@ -20,6 +20,8 @@ sh install.sh --mode warn                                   # macOS / Linux / WS
 powershell -ExecutionPolicy Bypass -File .\install.ps1 --mode warn   # Windows
 ```
 
+The installer asks how long to keep per-session data (see [Session data](#session-data)). Press Enter to accept 30 days.
+
 Restart Claude Code. `--mode warn` is a safe way to start: every check tells you what it *would* have blocked but lets everything through. When you're happy with what you see, re-run the installer without `--mode warn` to switch to the normal defaults.
 
 To remove everything again:
@@ -83,6 +85,7 @@ The `!` prefix makes you the one running it; Claude is blocked from clearing the
 | `--scope project --project DIR` | Register the hooks only in `DIR/.claude/settings.json`. `~/.claude/settings.json` is left alone. |
 | `--template DIR` | Deploy a starter `~/.claude` first (see below). |
 | `--dry-run` | Show what would change, change nothing. |
+| `--retention-days N` | Auto-delete session data after N days unused, or `0` to never auto-delete. Skips the question. |
 | `--statusline` | Also install a status line showing context %, cost, top tools and taint state. macOS and Linux only; see the note below for Windows. |
 | `--uninstall [--keep-data]` | Remove the hook entries, `/cchooks-report` and `~/.claude/cchooks/`. `--keep-data` keeps logs and config. |
 | `--doctor` | Check the install and run a self-test. |
@@ -119,6 +122,15 @@ Edit `~/.claude/cchooks/config.json`. Changes apply immediately, with no restart
 All settings, with their defaults, are listed in [`src/cchooks/config.py`](src/cchooks/config.py).
 
 A repository can add its own `.claude/cchooks.json`. For security checks it can only make them *stricter*, because you might open a repository you don't trust. Usability settings, such as which test command the verification gate looks for, can be set freely per project.
+
+## Session data
+
+Each Claude Code session gets a small folder in `~/.claude/cchooks/state/`. It holds the token stats, taint flag, subagent counts and loop history, so each new session starts from zero. Old folders are deleted automatically:
+- The installer asks how many days of inactivity to allow before deleting (default 30). `0` means never delete.
+- The cleanup runs at most once a day, at session start, and never touches the current session.
+- You can change the setting later with `"retention_days"` in `config.json`.
+
+The audit log (`logs/audit.jsonl`) is a permanent record and is never auto-deleted.
 
 ## Troubleshooting
 

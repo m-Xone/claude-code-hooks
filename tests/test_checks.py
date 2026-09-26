@@ -471,5 +471,52 @@ class ReviewRegressions(HookTest):
             del os.environ["CCHOOKS_GITBASH_PATHS"]
 
 
+class Retention(HookTest):
+    def make_session(self, name, age_days):
+        from cchooks import state
+        store = state.Store(name, "ledger")
+        with store.update() as d:
+            d["x"] = 1
+        t = __import__("time").time() - age_days * 86400
+        for p in (store.path, os.path.dirname(store.path)):
+            os.utime(p, (t, t))
+        return os.path.dirname(store.path)
+
+    def test_old_sessions_pruned_current_and_recent_kept(self):
+        old = self.make_session("old", 45)
+        recent = self.make_session("recent", 3)
+        current = self.make_session(self.session, 90)  # idle for ages but it's the live session
+        self.write_config({})
+        self.run_event("SessionStart", source="startup")
+        self.assertFalse(os.path.exists(old))
+        self.assertTrue(os.path.exists(recent))
+        self.assertTrue(os.path.exists(current))
+
+    def test_zero_means_never(self):
+        old = self.make_session("old", 400)
+        os.makedirs(self.home, exist_ok=True)
+        with open(os.path.join(self.home, "config.json"), "w") as f:
+            json.dump({"retention_days": 0}, f)
+        self.run_event("SessionStart", source="startup")
+        self.assertTrue(os.path.exists(old))
+
+    def test_runs_at_most_daily(self):
+        from cchooks import state
+        self.make_session("a", 40)
+        self.assertEqual(state.prune_sessions(30), 1)
+        self.make_session("b", 40)
+        self.assertEqual(state.prune_sessions(30), 0)  # marker: already ran today
+
+    def test_prompt(self):
+        from unittest import mock
+        from cchooks import installer
+        with mock.patch("builtins.input", side_effect=["abc", "7"]):
+            self.assertEqual(installer.resolve_retention(None, interactive=True), 7)
+        with mock.patch("builtins.input", return_value=""):
+            self.assertEqual(installer.resolve_retention(None, interactive=True), 30)
+        self.assertEqual(installer.resolve_retention(0, interactive=True), 0)
+        self.assertEqual(installer.resolve_retention(None, interactive=False), 30)
+
+
 if __name__ == "__main__":
     unittest.main()

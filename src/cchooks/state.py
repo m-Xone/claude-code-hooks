@@ -139,6 +139,49 @@ def audit(event: Dict[str, Any], check: str, action: str, detail: str, **extra: 
         pass
 
 
+def prune_sessions(days: float, keep: str = "", now: float = 0.0) -> int:
+    """Delete session folders whose newest file is older than `days`. 0 disables.
+
+    Runs at most once a day (marker file), skips the current session, and never raises.
+    Returns the number of folders removed.
+    """
+    import shutil
+    if not days or days <= 0:
+        return 0
+    now = now or time.time()
+    root = os.path.join(util.data_dir(), "state")
+    marker = os.path.join(root, ".last-prune")
+    try:
+        if now - os.path.getmtime(marker) < 86400:
+            return 0
+    except OSError:
+        pass
+    removed = 0
+    cutoff = now - days * 86400
+    try:
+        names = os.listdir(root)
+    except OSError:
+        return 0
+    for name in names:
+        d = os.path.join(root, name)
+        if name.startswith(".") or name == _safe(keep) or not os.path.isdir(d):
+            continue
+        try:
+            newest = max([os.path.getmtime(d)] + [os.path.getmtime(os.path.join(d, f)) for f in os.listdir(d)])
+            if newest < cutoff:
+                shutil.rmtree(d)
+                removed += 1
+        except OSError:
+            continue
+    try:
+        os.makedirs(root, exist_ok=True)
+        with open(marker, "w") as f:
+            f.write(str(now))
+    except OSError:
+        pass
+    return removed
+
+
 def fail_open_flag() -> str:
     """Presence of this file makes an internal crash fail open instead of closed."""
     return os.path.join(util.data_dir(), "FAIL_OPEN")

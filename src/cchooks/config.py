@@ -34,6 +34,9 @@ PROJECT_APPENDABLE = {"extra_patterns", "protected_branches"}
 DEFAULTS: Dict[str, Any] = {
     # On an internal error, security checks ask/block instead of silently allowing.
     "fail_closed": True,
+    # Delete per-session state folders untouched for this many days (checked once a day at
+    # session start). 0 = never auto-delete. Chosen at install time.
+    "retention_days": 30,
     "checks": {
         "prompt_gate": {
             "mode": "enforce",

@@ -132,20 +132,47 @@ def _copy_lib(src_root: str) -> Dict[str, str]:
     return manifest
 
 
-def _write_default_config(mode: Optional[str]) -> str:
+def _read_user_config() -> Dict[str, Any]:
+    try:
+        with open(config.user_config_path(), "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def resolve_retention(flag: Optional[int], interactive: bool) -> int:
+    """Days to keep session data: --retention-days, else ask (default: current or 30), else current or 30."""
+    if flag is not None:
+        return flag
+    current = _read_user_config().get("retention_days")
+    default = current if isinstance(current, int) and current >= 0 else config.DEFAULTS["retention_days"]
+    if not interactive:
+        return default
+    print("\ncchooks keeps a small state folder per Claude Code session (token stats, taint flag, ...).")
+    while True:
+        try:
+            answer = input("Auto-delete session data older than how many days? 0 = never [%d]: " % default).strip()
+        except EOFError:
+            return default
+        if not answer:
+            return default
+        if answer.isdigit():
+            return int(answer)
+        print("  Please enter a whole number of days (0 to never delete).")
+
+
+def _write_default_config(mode: Optional[str], retention_days: int) -> str:
     path = config.user_config_path()
-    existing = {}
-    if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
-            existing = json.load(f)
+    existing = _read_user_config()
     if mode:
         checks = existing.setdefault("checks", {})
         for name in config.DEFAULTS["checks"]:
             checks.setdefault(name, {})["mode"] = mode
-    if mode or not os.path.exists(path):
-        existing.setdefault("_comment", "Overrides for cchooks defaults. Modes: off | warn | enforce. "
-                                        "See README for every setting.")
-        _write_json(path, existing)
+    existing.setdefault("_comment", "Overrides for cchooks defaults. Modes: off | warn | enforce. "
+                                    "See README for every setting.")
+    existing["retention_days"] = retention_days
+    _write_json(path, existing)
     return path
 
 
@@ -239,7 +266,8 @@ def apply_template(plan: List[Tuple[str, str, str, str]], stamp: str) -> None:
 
 
 def install(repo_root: str, scope: str = "user", project: Optional[str] = None, mode: Optional[str] = None,
-            statusline: bool = False, template: Optional[str] = None, dry_run: bool = False) -> int:
+            statusline: bool = False, template: Optional[str] = None, dry_run: bool = False,
+            retention_days: Optional[int] = None) -> int:
     if sys.version_info < MIN_PY:
         print("cchooks needs Python %d.%d+; this is %s" % (MIN_PY + (sys.version.split()[0],)))
         return 1
@@ -280,7 +308,12 @@ def install(repo_root: str, scope: str = "user", project: Optional[str] = None, 
             label = {"merge": "merge into existing" if os.path.exists(spath) else "create",
                      "replace": "back up + replace", "create": "add", "identical": "unchanged"}[action]
             print("  %-20s %s" % (label, rel))
+    if retention_days is not None and retention_days < 0:
+        print("--retention-days must be 0 (never delete) or a positive number of days.")
+        return 1
+    retention = resolve_retention(retention_days, interactive=sys.stdin.isatty() and not dry_run)
     if dry_run:
+        print("Would keep session data for %s" % ("ever (no auto-delete)" if retention == 0 else "%d days" % retention))
         print("Would register cchooks hooks for %s in %s using %s" % (", ".join(e for e, _ in EVENTS), spath, python))
         print("Dry run: nothing was changed.")
         return 0
@@ -314,7 +347,7 @@ def install(repo_root: str, scope: str = "user", project: Optional[str] = None, 
     info = {"version": __version__, "python": python, "lib_dir": lib_dir(), "settings_path": spath,
             "settings_paths": list(dict.fromkeys(prev + [spath])), "scope": scope, "installed_at": time.time(), "manifest": manifest}
     _write_json(os.path.join(util.data_dir(), "install.json"), info)
-    cfg_path = _write_default_config(mode)
+    cfg_path = _write_default_config(mode, retention)
     cmd = _install_command(repo_root)
 
     print("Installed cchooks %s" % __version__)
@@ -322,6 +355,8 @@ def install(repo_root: str, scope: str = "user", project: Optional[str] = None, 
     print("  code        : %s" % lib_dir())
     print("  hooks in    : %s" % spath)
     print("  config      : %s" % cfg_path)
+    print("  session data: %s" % ("kept forever (auto-delete off)" if retention == 0
+                                  else "deleted after %d days unused" % retention))
     if cmd:
         print("  command     : /cchooks-report")
     for n in notes:
