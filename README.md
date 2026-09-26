@@ -124,13 +124,15 @@ Variants:
 Glyph sets:
 - `basic` (the default) uses only characters that standard fonts such as Consolas, Cascadia, Menlo and DejaVu all include, so no font changes are needed.
 - `ascii` suits old consoles.
-- `nerd` adds icons and powerline arrows, but needs a [Nerd Font](https://www.nerdfonts.com).
+- `nerd` adds icons and powerline arrows, but needs a [Nerd Font](https://www.nerdfonts.com). It matches the original bash status line (`statusline.sh`) byte for byte.
 
 Change the variant or glyph set any time in `config.json`:
 
 ```json
-"statusline": {"variant": "subscription", "glyphs": "basic", "right_reserve": 0}
+"statusline": {"variant": "subscription", "glyphs": "basic", "right_reserve": 0, "show_cchooks": true}
 ```
+
+`show_cchooks: false` hides the `TAINTED` flag and subagent count. The installer sets the status line to refresh every 2 seconds (`refreshInterval` in `settings.json`), so resizing the terminal corrects it quickly.
 
 **If the right end gets cut off:** Claude Code uses a few columns at the right edge for its own badges. To find out how many:
 1. Run `cli.py ruler on`. The status line becomes a numbered ruler.
@@ -141,6 +143,9 @@ Change the variant or glyph set any time in `config.json`:
 If you used the earlier bash status line, the installer copies your calibrated `RIGHT_RESERVE` from `statusline.conf`.
 
 ## Configuration
+
+Paths below assume the default `~/.claude`. If you installed with `--claude-dir`, use that folder instead.
+
 
 Edit `~/.claude/cchooks/config.json`. Changes apply immediately, with no restart needed. Every check has a `mode` of `off`, `warn` or `enforce`:
 
@@ -191,7 +196,7 @@ Per-tool token figures are estimates. Per-model and per-subagent totals are exac
 ## Development
 
 ```sh
-cd tests && python3 -m unittest      # 77 tests, including an end-to-end install into a temp directory
+cd tests && python3 -m unittest      # 95 tests, including end-to-end installs into temp directories
 ```
 
 - `src/hook.py` is the hook entry point.
